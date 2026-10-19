@@ -1,0 +1,24 @@
+{
+  "name": "claude-focus",
+  "description": "Switch Claude Desktop subscription accounts on one Mac and copy Code session indexes.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "cfocus": "./src/cli.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "CFOCUS_LANG=zh node --test test/*.ts",
+    "cfocus": "node src/cli.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}
