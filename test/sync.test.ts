@@ -18,6 +18,7 @@ function session(dir: string, id: string, title: string): SessionMeta {
     createdAt: 1,
     isArchived: false,
     cliSessionId: "c79590cf-36cb-4595-89fc-d86552aa579c",
+    childSessionIds: [],
   };
 }
 

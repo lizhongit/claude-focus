@@ -330,6 +330,88 @@ test("一次切换同时复制会话索引，并且只重启一轮", async () =>
   assert.match(fake.logs.join("\n"), /复制 1/);
 });
 
+test("切换复制会话时带上子会话，--overwrite 同时覆盖", async () => {
+  const { root, paths } = await tempDesktop();
+  await seedLiveAccount(paths.claudeDataDir);
+  const fake = fakeDesktop({ root, paths, fetchImpl: scriptedFetch(["a@example.com"]) });
+  await initDesktop(fake.runtime);
+  const parentName = `local_${SESSION_ID}.json`;
+  const childId = "22222222-2222-4222-8222-222222222222";
+  const childName = `local_${childId}.json`;
+  const sourceDir = path.join(paths.claudeDataDir, "claude-code-sessions", UUID_A, ORG_A);
+  await writeFile(
+    path.join(sourceDir, parentName),
+    JSON.stringify({
+      title: "主会话",
+      sideSessionNotes: [{ sessionId: `local_${childId}` }],
+    }),
+  );
+  await writeFile(path.join(sourceDir, childName), JSON.stringify({ title: "子会话" }));
+  const destDir = path.join(paths.sharedDir, "claude-code-sessions", UUID_B, ORG_B);
+  await mkdir(destDir, { recursive: true });
+  await writeFile(path.join(destDir, parentName), JSON.stringify({ title: "旧主会话" }));
+  await writeFile(path.join(destDir, childName), JSON.stringify({ title: "旧子会话" }));
+  const profileB = path.join(paths.profilesDir, UUID_B);
+  await mkdir(profileB, { recursive: true });
+  await writeFile(path.join(profileB, "who.txt"), "b");
+  await symlink(path.join(paths.sharedDir, "Cache"), path.join(profileB, "Cache"));
+  const state = await loadState(paths.statePath);
+  assert.ok(state);
+  state.accounts[UUID_B] = {
+    email: "b@example.com",
+    organizationUuid: ORG_B,
+    adoptedAt: "2026-10-19T00:00:00.000Z",
+    plan: null,
+  };
+  const { saveState } = await import("../src/desktop/state.ts");
+  await saveState(paths.statePath, state);
+  await switchAccount(fake.runtime, {
+    toEmail: "b@example.com",
+    sessionIds: [SESSION_ID],
+    overwrite: true,
+  });
+  const parent = JSON.parse(await readFile(path.join(destDir, parentName), "utf8")) as { title: string };
+  const child = JSON.parse(await readFile(path.join(destDir, childName), "utf8")) as { title: string };
+  assert.equal(parent.title, "主会话");
+  assert.equal(child.title, "子会话");
+  assert.match(fake.logs.join("\n"), /一并带上 1 个关联子会话/);
+  assert.match(fake.logs.join("\n"), /覆盖 2/);
+});
+
+test("Desktop 原本关闭时，切换后保持关闭", async () => {
+  const { root, paths } = await tempDesktop();
+  await seedLiveAccount(paths.claudeDataDir);
+  const fake = fakeDesktop({ root, paths, fetchImpl: scriptedFetch(["a@example.com"]) });
+  await initDesktop(fake.runtime);
+  const profileB = path.join(paths.profilesDir, UUID_B);
+  await mkdir(profileB, { recursive: true });
+  await writeFile(path.join(profileB, "who.txt"), "b");
+  const state = await loadState(paths.statePath);
+  assert.ok(state);
+  state.accounts[UUID_B] = {
+    email: "b@example.com",
+    organizationUuid: ORG_B,
+    adoptedAt: "2026-10-19T00:00:00.000Z",
+    plan: null,
+  };
+  const { saveState } = await import("../src/desktop/state.ts");
+  await saveState(paths.statePath, state);
+  fake.running.value = false;
+  const launchesBefore = fake.launches.count;
+  const quitsBefore = fake.quits.count;
+  await switchAccount(fake.runtime, {
+    toEmail: "b@example.com",
+    sessionIds: [],
+    overwrite: false,
+  });
+  assert.equal(fake.quits.count, quitsBefore);
+  assert.equal(fake.launches.count, launchesBefore);
+  assert.equal(fake.running.value, false);
+  assert.equal(await readFile(path.join(paths.claudeDataDir, "who.txt"), "utf8"), "b");
+  assert.equal((await loadState(paths.statePath))?.currentAccountUuid, UUID_B);
+  assert.match(fake.logs.join("\n"), /保持关闭/);
+});
+
 test("account list 默认不读钥匙串，--usage 只打印额度", async () => {
   const { root, paths } = await tempDesktop();
   await seedLiveAccount(paths.claudeDataDir);

@@ -6,13 +6,16 @@ import {
   upsertKnownAccount,
 } from "../config.ts";
 import {
+  formatRemaining,
   formatShanghai,
   renderAccountTable,
   type AccountListRow,
   type AccountUsageCells,
 } from "../format.ts";
 import {
+  childExpansionNotes,
   chooseOrg,
+  expandChildSessions,
   findSession,
   listOrgCandidates,
   normalizeSessionId,
@@ -309,10 +312,10 @@ function formatWindow(label: string, window: UsageWindow | null): string | null 
   const reset =
     window.resetsAt == null
       ? text("unknown time", "时间未知")
-      : formatShanghai(Date.parse(window.resetsAt));
+      : formatRemaining(Date.parse(window.resetsAt));
   return text(
-    `  ${label} ${window.utilization}%, resets ${reset}`,
-    `  ${label} ${window.utilization}%，重置 ${reset}`,
+    `  ${label} ${window.utilization}%, ${reset}`,
+    `  ${label} ${window.utilization}%，${reset}`,
   );
 }
 
@@ -424,6 +427,8 @@ async function buildAccountRow(
           fiveHour: snapshot.usage?.fiveHour?.utilization ?? null,
           sevenDay: snapshot.usage?.sevenDay?.utilization ?? null,
           sevenDaySonnet: snapshot.usage?.sevenDaySonnet?.utilization ?? null,
+          fiveHourResetsAt: snapshot.usage?.fiveHour?.resetsAt ?? null,
+          sevenDayResetsAt: snapshot.usage?.sevenDay?.resetsAt ?? null,
           note:
             snapshot.usage == null
               ? text("No organization, so usage is unavailable.", "没有组织，查不到额度")
@@ -437,6 +442,8 @@ async function buildAccountRow(
           fiveHour: null,
           sevenDay: null,
           sevenDaySonnet: null,
+          fiveHourResetsAt: null,
+          sevenDayResetsAt: null,
           note: message,
         };
       } else {
@@ -514,8 +521,10 @@ async function planSessionCopies(
       ),
     );
   }
+  const expanded = expandChildSessions(sessions, chosen);
+  for (const note of childExpansionNotes(chosen.length, expanded)) runtime.log(note);
   return planCopies({
-    sessions: chosen,
+    sessions: expanded.sessions,
     destDir: destChoice.org.dir,
     overwrite: options.overwrite,
     destExists: existsSync,
@@ -971,12 +980,19 @@ export async function switchAccount(
       ),
     );
   }
+  const reopenDesktop = runtime.isRunning();
+  const targetName = target.account.email || target.uuid;
   await confirmed(
     runtime,
-    text(
-      `Claude Desktop will quit, switch to ${target.account.email || target.uuid}, and open again. Continue?`,
-      `将退出 Claude Desktop，切换到 ${target.account.email || target.uuid}，然后重新打开。继续？`,
-    ),
+    reopenDesktop
+      ? text(
+          `Claude Desktop will quit, switch to ${targetName}, and open again. Continue?`,
+          `将退出 Claude Desktop，切换到 ${targetName}，然后重新打开。继续？`,
+        )
+      : text(
+          `Switch to ${targetName}. Claude Desktop stays closed. Continue?`,
+          `将切换到 ${targetName}。Claude Desktop 保持关闭。继续？`,
+        ),
   );
   await withDesktopStopped(runtime, async () => {
     if (plans.length > 0) {
@@ -1003,5 +1019,9 @@ export async function switchAccount(
       `已切换到 ${target.account.email || target.uuid}`,
     ),
   );
-  await openDesktop(runtime);
+  if (reopenDesktop) {
+    await openDesktop(runtime);
+    return;
+  }
+  runtime.log(text("Claude Desktop stays closed.", "Claude Desktop 保持关闭。"));
 }

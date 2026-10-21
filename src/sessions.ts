@@ -28,6 +28,12 @@ export interface SessionMeta {
   createdAt: number | null;
   isArchived: boolean;
   cliSessionId: string | null;
+  childSessionIds: string[];
+}
+
+export interface ChildExpansion {
+  sessions: SessionMeta[];
+  missing: string[];
 }
 
 export function chooseOrg(
@@ -96,6 +102,79 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function childSessionIdsFrom(record: Record<string, unknown>): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const key of ["sideSessionNotes", "queuedSideSessionNotes"]) {
+    const list = record[key];
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (item == null || typeof item !== "object" || Array.isArray(item)) continue;
+      const raw = (item as Record<string, unknown>).sessionId;
+      if (typeof raw !== "string") continue;
+      const id = normalizeSessionId(raw);
+      if (id == null) continue;
+      const folded = id.toLowerCase();
+      if (seen.has(folded)) continue;
+      seen.add(folded);
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+export function expandChildSessions(sessions: SessionMeta[], roots: SessionMeta[]): ChildExpansion {
+  const byId = new Map(sessions.map((session) => [session.sessionId.toLowerCase(), session]));
+  const out: SessionMeta[] = [];
+  const seen = new Set<string>();
+  const missing: string[] = [];
+  const missingSeen = new Set<string>();
+  const queue = [...roots];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current == null) continue;
+    const key = current.sessionId.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(current);
+    for (const childId of current.childSessionIds) {
+      const child = byId.get(childId.toLowerCase());
+      if (child == null) {
+        const folded = childId.toLowerCase();
+        if (!missingSeen.has(folded)) {
+          missingSeen.add(folded);
+          missing.push(childId);
+        }
+        continue;
+      }
+      queue.push(child);
+    }
+  }
+  return { sessions: out, missing };
+}
+
+export function childExpansionNotes(chosenCount: number, expanded: ChildExpansion): string[] {
+  const notes: string[] = [];
+  const extra = expanded.sessions.length - chosenCount;
+  if (extra > 0) {
+    notes.push(
+      text(
+        `Including ${extra} related sessions.`,
+        `一并带上 ${extra} 个关联子会话。`,
+      ),
+    );
+  }
+  for (const id of expanded.missing) {
+    notes.push(
+      text(
+        `Related session ${id} is not in the source account, so it was not copied.`,
+        `关联子会话 ${id} 不在来源账号里，没有复制。`,
+      ),
+    );
+  }
+  return notes;
+}
+
 export function parseSessionMeta(
   filePath: string,
   raw: unknown,
@@ -125,6 +204,7 @@ export function parseSessionMeta(
     createdAt: numberOrNull(record.createdAt),
     isArchived: record.isArchived === true,
     cliSessionId,
+    childSessionIds: childSessionIdsFrom(record),
   };
 }
 

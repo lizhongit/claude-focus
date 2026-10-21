@@ -27,6 +27,14 @@ test("account 和 switch 解析成独立命令", () => {
   const listed = parseArgs(["account", "list", "--usage"]);
   assert.equal(listed.flags.usage, true);
 
+  const sessions = parseArgs(["list", "a@example.com", "--limit", "5"]);
+  assert.equal(sessions.command, "list");
+  assert.equal(sessions.email, "a@example.com");
+  assert.equal(sessions.flags.limit, 5);
+  assert.equal(parseArgs(["list"]).flags.limit, undefined);
+  assert.throws(() => parseArgs(["list", "--limit", "0"]), ConfigError);
+  assert.throws(() => parseArgs(["list", "--limit", "20.5"]), ConfigError);
+
   const switched = parseArgs([
     "switch",
     "--to",

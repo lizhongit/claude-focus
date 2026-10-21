@@ -59,9 +59,9 @@ cfocus account list
 cfocus switch --to <邮箱> --yes
 ```
 
-切换会退出 Desktop，换上目标账号的整份数据目录，然后重新打开一次。退出不成功时不会移动文件。
+切换会换上目标账号的整份数据目录。Desktop 开着时会先退出，切换后再打开一次；原本关着则保持关闭。退出不成功时不会移动文件。
 
-切换时可以顺便复制会话索引。目标里已有同名文件则跳过；要覆盖时加 `--overwrite`。
+切换时可以顺便复制会话索引。索引里记录的子会话会一起复制，子会话再拉起的也会带上。目标里已有同名文件则跳过；加 `--overwrite` 时，选中的索引和这些关联子会话都会覆盖。
 
 ```bash
 cfocus switch --to <邮箱> --session <会话 ID> --yes
@@ -80,22 +80,22 @@ cfocus account usage
 cfocus account usage <邮箱>
 ```
 
-`account list` 是一张表。列是状态、邮箱、档位、登录到期。带 `--usage` 时再加 5 小时、7 天、Sonnet 三列。终端里当前账号为绿色，邮箱为青色，登录到期为蓝色。备用账号的状态会变暗。设置 `NO_COLOR` 时只保留对齐。
+`account list` 是一张表。列是状态、邮箱、档位、登录到期。带 `--usage` 时再加 5 小时、5小时剩余、7 天、周剩余、Sonnet。终端里当前账号为绿色，邮箱为青色，登录到期和剩余时间为蓝色。备用账号的状态会变暗。设置 `NO_COLOR` 时只保留对齐。
 
 `cfocus account list --usage` 的输出类似：
 
 ```text
 Desktop 账号  2 个
 
-状态  邮箱               档位  登录到期          5 小时  7 天  Sonnet
-─────────────────────────────────────────────────────────────────────
-当前  ada@example.com    Pro   2026-11-16 09:50  8%      13%   —
+状态  邮箱               档位  登录到期          5 小时  5小时剩余    7 天  周剩余    Sonnet
+────────────────────────────────────────────────────────────────────────────────────────────
+当前  ada@example.com    Pro   2026-11-16 09:50  8%      剩余 2小时   13%   剩余 1天  —
       11111111-1111-4111-8111-111111111111   组织 aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
-备用  blake@example.com  Pro   2026-11-16 16:10  0%      100%  —
+备用  blake@example.com  Pro   2026-11-16 16:10  0%      剩余 30分钟  100%  剩余 5天  —
       22222222-2222-4222-8222-222222222222   组织 bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
 ```
 
-百分比是已经用掉的比例。Sonnet 这一列没有数据时显示 —。第二行是账号 UUID 和组织 UUID。
+百分比是已经用掉的比例。剩余时间取最大的单位，例如 `剩余 1天`、`剩余 2小时`、`剩余 30分钟`。已经到点显示 `已重置`。没有数据时显示 —。Sonnet 这一列没有数据时也显示 —。第二行是账号 UUID 和组织 UUID。
 
 档位是该账号在 claude.ai 上的订阅，记在 `state.json` 的 `plan` 字段里。显示名称是：
 
@@ -129,7 +129,7 @@ Desktop 账号  2 个
 cfocus                              # 交互选择
 cfocus init                         # 按本机会话目录生成邮箱映射
 cfocus accounts
-cfocus list [邮箱]
+cfocus list [邮箱] [--limit <条数>]
 cfocus sync --from <邮箱> --to <邮箱> --session <id> [--dry-run] [--overwrite]
 ```
 
@@ -139,7 +139,32 @@ cfocus sync --from <邮箱> --to <邮箱> --session <id> [--dry-run] [--overwrit
 ~/Library/Application Support/Claude/claude-code-sessions/<账号 UUID>/<组织 UUID>/local_*.json
 ```
 
-组织目录会自动选择唯一含有 `local_*.json` 的那一个。目标已存在同名文件时默认跳过。Claude Desktop 正在运行时，`sync` 拒绝写入。
+组织目录会自动选择唯一含有 `local_*.json` 的那一个。目标已存在同名文件时默认跳过。Claude Desktop 正在运行时，`sync` 拒绝写入。复制会话时会带上它的子会话。`--overwrite` 对子会话的索引同样覆盖。
+
+`cfocus list` 列出每个已填写邮箱的账号里最新的会话。带上邮箱就只列那一个账号。每个组织默认 20 条，用 `--limit` 修改。`--limit` 只接受正整数。
+
+```bash
+cfocus list
+cfocus list ada@example.com --limit 50
+```
+
+时间是上海时间，最新的在前。终端里在用会话的时间为青色，状态为绿色。归档会话变暗，状态为黄色。项目名为蓝色。会话 ID 单独占下一行。设置 `NO_COLOR` 时只保留对齐。
+
+一共 86 条、`--limit 2` 时，输出类似：
+
+```text
+ada@example.com  2 / 86 条
+11111111-1111-4111-8111-111111111111   组织 aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+
+时间              状态  项目  标题
+──────────────────────────────────────────────────────────────────────────────
+2026-10-18 21:11  在用  ujoy  生产数据导入失败行分析
+                              local_81d31fdc-abfe-4a8f-b60c-f938da388636
+2026-10-16 15:26  归档  ujoy  已归档的会话
+                              local_11111111-1111-4111-8111-111111111111
+```
+
+没有列全时，标题写成 `2 / 86 条`。全部列出时只写条数。
 
 `cfocus init` 和 `cfocus account init` 不是同一件事。前者只写会话用的邮箱映射；后者才保存 Desktop 登录。
 

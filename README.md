@@ -59,9 +59,9 @@ cfocus account list
 cfocus switch --to <email> --yes
 ```
 
-Switching quits Desktop, swaps in the destination account's data directory, and opens Desktop once. If Desktop does not quit, no files are moved.
+Switching swaps in the destination account's data directory. If Desktop is open, it quits and opens again afterward. If Desktop is already closed, it stays closed. If Desktop does not quit, no files are moved.
 
-A switch can also copy session indexes. An existing file at the destination is left in place. Add `--overwrite` to replace it.
+A switch can also copy session indexes. Child sessions recorded on that index are copied with it, including children of those children. An existing file at the destination is left in place. Add `--overwrite` to replace the selected indexes and their related child sessions.
 
 ```bash
 cfocus switch --to <email> --session <session id> --yes
@@ -80,22 +80,22 @@ cfocus account usage
 cfocus account usage <email>
 ```
 
-`account list` prints a table: status, email, plan, and login expiry. `--usage` adds the 5-hour, 7-day, and Sonnet columns. In a terminal, the current account is green, its email is cyan, and the login expiry is blue. The other account's status is dimmed. `NO_COLOR` keeps the alignment and drops the color.
+`account list` prints a table: status, email, plan, and login expiry. `--usage` adds the 5-hour usage, time left in that window, the 7-day usage, time left in the week, and Sonnet. In a terminal, the current account is green, its email is cyan, and the login expiry and time left are blue. The other account's status is dimmed. `NO_COLOR` keeps the alignment and drops the color.
 
 `cfocus account list --usage` looks like this:
 
 ```text
 Desktop accounts  2
 
-Status   Email              Plan  Login expires     5 hours  7 days  Sonnet
-───────────────────────────────────────────────────────────────────────────
-Current  ada@example.com    Pro   2026-11-16 09:50  8%       13%     —
+Status   Email              Plan  Login expires     5 hours  5h left       7 days  Week left    Sonnet
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+Current  ada@example.com    Pro   2026-11-16 09:50  8%       2 hours left  13%     1 day left   —
          11111111-1111-4111-8111-111111111111   org aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
-Other    blake@example.com  Pro   2026-11-16 16:10  0%       100%    —
+Other    blake@example.com  Pro   2026-11-16 16:10  0%       30 min left   100%    5 days left  —
          22222222-2222-4222-8222-222222222222   org bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
 ```
 
-A percentage is the share already used. Sonnet shows — when that window has no number. The second line is the account UUID and the organization UUID.
+A percentage is the share already used. Time left uses the largest unit: days, then hours, then minutes, for example `1 day left`, `2 hours left`, or `30 min left`. A window that has already reset shows `reset`. Sonnet and a missing time show —. The second line is the account UUID and the organization UUID.
 
 The plan is the subscription on claude.ai, stored as `plan` in `state.json`. The labels are:
 
@@ -129,7 +129,7 @@ You can copy sidebar indexes without switching the login:
 cfocus                              # pick accounts and sessions interactively
 cfocus init                         # build the email map from local session directories
 cfocus accounts
-cfocus list [email]
+cfocus list [email] [--limit <n>]
 cfocus sync --from <email> --to <email> --session <id> [--dry-run] [--overwrite]
 ```
 
@@ -139,7 +139,32 @@ The copied file is:
 ~/Library/Application Support/Claude/claude-code-sessions/<account UUID>/<organization UUID>/local_*.json
 ```
 
-The organization is the only directory that contains `local_*.json`. A destination file with the same name is skipped. `sync` refuses to write while Claude Desktop is running.
+The organization is the only directory that contains `local_*.json`. A destination file with the same name is skipped. `sync` refuses to write while Claude Desktop is running. A copied session brings its child sessions along. `--overwrite` replaces those child indexes too.
+
+`cfocus list` prints the newest sessions for every account that has an email. Pass an email to list one account. Each organization shows 20 sessions unless you pass `--limit`. `--limit` takes a positive integer.
+
+```bash
+cfocus list
+cfocus list ada@example.com --limit 50
+```
+
+Times are Shanghai time, newest first. In a terminal the active time is cyan and its status is green. An archived row is dim, with a yellow status. The project name is blue. The session id is on the next line. `NO_COLOR` keeps the alignment and drops the color.
+
+`cfocus list --limit 2` looks like this when 86 sessions exist:
+
+```text
+ada@example.com  2 of 86
+11111111-1111-4111-8111-111111111111   org aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+
+Time              Status    Project  Title
+─────────────────────────────────────────────────────────────────────────────────────
+2026-10-18 21:11  Active    ujoy     failed import rows
+                                     local_81d31fdc-abfe-4a8f-b60c-f938da388636
+2026-10-16 15:26  Archived  ujoy     archived session
+                                     local_11111111-1111-4111-8111-111111111111
+```
+
+The heading is `2 of 86` when the list is shorter than the full set. A complete list shows only the number of sessions.
 
 `cfocus init` writes the email map used by session lists. `cfocus account init` saves the Desktop login.
 

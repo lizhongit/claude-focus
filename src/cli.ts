@@ -44,7 +44,9 @@ import type { FetchLike } from "./desktop/usage.ts";
 import { baseName, formatShanghai, renderSessionTable, shortId } from "./format.ts";
 import { claudeDesktopRunning } from "./process.ts";
 import {
+  childExpansionNotes,
   chooseOrg,
+  expandChildSessions,
   findSession,
   listOrgCandidates,
   normalizeSessionId,
@@ -67,6 +69,7 @@ interface Flags {
   yes: boolean;
   usage: boolean;
   help: boolean;
+  limit?: number;
   lang?: "en" | "zh";
 }
 
@@ -85,7 +88,7 @@ Usage
   cfocus                         Pick a source account, sessions, and a destination
   cfocus init                    Build the email map from local session directories
   cfocus accounts                Show email, account UUID, and organization UUID
-  cfocus list [email]            List sessions
+  cfocus list [email] [--limit <n>]  List the newest sessions. Default 20
   cfocus sync --from <email> --to <email> --session <id> [--dry-run]
 
   cfocus account init [--yes]    Back up Desktop data and share caches by symlink
@@ -101,18 +104,20 @@ Options
   --config <path>       Email map. Default ~/.config/claude-focus/accounts.json
   --from <email>        Source account
   --to <email>          Destination account
-  --session <id>        Session id. Repeatable. Accepts a local_ prefix or a bare UUID
+  --session <id>        Session id. Repeatable. Bare UUID or local_ prefix. Child sessions are included
   --source-org <uuid>   Source organization, when one account has several session orgs
   --dest-org <uuid>     Destination organization
   --dry-run             Print the paths that would be copied
-  --overwrite           Replace an existing session index
+  --overwrite           Replace the session index and its related child sessions
   --yes                 Do not ask before quitting or switching Desktop
   --usage               With account list, query usage and refresh the plan
+  --limit <n>           How many sessions list shows. Default 20
   --help                Show this help
 
 Session indexes live in claude-code-sessions/<account>/<org>/local_*.json.
+Copying a session also copies the child sessions recorded on it, and their children. --overwrite replaces those too.
 Transcripts stay in ~/.claude/projects and are shared. They are not copied.
-Switching quits Claude Desktop, swaps in that account's data directory, and opens it once.
+Switching swaps in that account's data directory. Claude Desktop is quit and opened again only when it was already open.
 Caches and the session directory are shared by symlink instead of copied per account.
 The first account init keeps one full backup of the current data directory.
 `,
@@ -122,7 +127,7 @@ The first account init keeps one full backup of the current data directory.
   cfocus                         交互选择来源、会话和目标
   cfocus init                    按本机会话目录生成邮箱映射
   cfocus accounts                查看邮箱、账号 UUID、组织 UUID
-  cfocus list [邮箱]             列出会话
+  cfocus list [邮箱] [--limit <条数>]  列出最新的会话，默认 20 条
   cfocus sync --from <邮箱> --to <邮箱> --session <id> [--dry-run]
 
   cfocus account init [--yes]    备份 Desktop 数据，并把缓存改为共享链接
@@ -138,18 +143,20 @@ The first account init keeps one full backup of the current data directory.
   --config <路径>       会话邮箱映射，默认 ~/.config/claude-focus/accounts.json
   --from <邮箱>         来源账号
   --to <邮箱>           目标账号
-  --session <id>        会话 ID，可重复。接受 local_ 前缀或裸 UUID
+  --session <id>        会话 ID，可重复。裸 UUID 或 local_ 前缀。子会话会一起复制
   --source-org <uuid>   来源组织。一个账号有多个含会话的组织时才需要
   --dest-org <uuid>     目标组织
   --dry-run             只打印将要复制的路径
-  --overwrite           目标已有同名索引时覆盖
+  --overwrite           覆盖选中的会话索引和关联子会话
   --yes                 退出或切换 Desktop 时不再询问
   --usage               account list 时查询额度，并刷新订阅档位
+  --limit <条数>        list 显示的条数，默认 20
   --help                显示帮助
 
 会话索引是 claude-code-sessions/<账号>/<组织>/local_*.json。
+复制会话时会带上它记录的子会话，以及这些子会话再拉起的会话。--overwrite 对它们同样覆盖。
 对话正文在 ~/.claude/projects，两边共用，不复制。
-切换账号会退出 Claude Desktop，换上该账号的整份数据目录，再打开一次。
+切换账号会换上该账号的整份数据目录。Claude Desktop 原本开着时先退出，切换后再打开；原本关着则保持关闭。
 缓存和会话目录用符号链接共享，不按账号各存一份。
 第一次 account init 会把当前数据目录完整备份。
 `,
@@ -243,6 +250,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg === "--dest-org") {
       flags.destOrg = next();
+      continue;
+    }
+    if (arg === "--limit") {
+      flags.limit = parseLimit(next());
       continue;
     }
     if (arg.startsWith("--")) throw new ConfigError(text(`Unknown option: ${arg}`, `未知选项：${arg}`));
@@ -496,8 +507,10 @@ async function runSync(options: {
       ),
     );
   }
+  const expanded = expandChildSessions(sessions, chosen);
+  for (const note of childExpansionNotes(chosen.length, expanded)) log.warn(note);
   const plans = planCopies({
-    sessions: chosen,
+    sessions: expanded.sessions,
     destDir: destOrg.dir,
     overwrite: options.overwrite,
     destExists: existsSync,
@@ -529,7 +542,16 @@ async function runSync(options: {
   return 0;
 }
 
-async function runList(config: AppConfig, email?: string): Promise<void> {
+const DEFAULT_LIST_LIMIT = 20;
+
+function parseLimit(raw: string): number {
+  if (!/^[1-9]\d*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+    throw new ConfigError(text("--limit must be a positive integer", "--limit 必须是正整数"));
+  }
+  return Number(raw);
+}
+
+async function runList(config: AppConfig, email: string | undefined, limit: number): Promise<void> {
   const accounts = email
     ? [accountByEmail(config, email)]
     : usableAccounts(config);
@@ -561,6 +583,7 @@ async function runList(config: AppConfig, email?: string): Promise<void> {
       }
       const { sessions, warnings } = await readSessions(org.dir);
       for (const warning of warnings) log.warn(warning);
+      const shown = sessions.slice(0, limit);
       console.log("");
       console.log(
         renderSessionTable({
@@ -569,7 +592,8 @@ async function runList(config: AppConfig, email?: string): Promise<void> {
           orgUuid: org.orgUuid,
           color: process.stdout.isTTY === true && process.env.NO_COLOR == null,
           ...(process.stdout.columns != null ? { columns: process.stdout.columns } : {}),
-          rows: sessions.map((session) => ({
+          total: sessions.length,
+          rows: shown.map((session) => ({
             time: formatShanghai(session.lastActivityAt),
             archived: session.isArchived,
             project: baseName(session.cwd),
@@ -726,8 +750,10 @@ async function runInteractive(config: AppConfig, flags: Flags): Promise<number> 
   const chosen = selected
     .map((id) => findSession(sessions, id))
     .filter((session): session is SessionMeta => session != null);
+  const expanded = expandChildSessions(sessions, chosen);
+  for (const note of childExpansionNotes(chosen.length, expanded)) log.warn(note);
   const plans = planCopies({
-    sessions: chosen,
+    sessions: expanded.sessions,
     destDir: destOrg.dir,
     overwrite: flags.overwrite,
     destExists: existsSync,
@@ -827,7 +853,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "list") {
-    await runList(config, email);
+    await runList(config, email, parsed.flags.limit ?? DEFAULT_LIST_LIMIT);
     return;
   }
   if (command === "sync") {

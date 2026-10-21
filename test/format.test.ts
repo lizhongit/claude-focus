@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { displayWidth, renderAccountTable, renderSessionTable } from "../src/format.ts";
+import { displayWidth, formatRemaining, renderAccountTable, renderSessionTable } from "../src/format.ts";
 import { setLocale } from "../src/i18n.ts";
 
 setLocale("zh");
@@ -45,7 +45,20 @@ test("会话表格按列对齐，并给会话 ID 单独一行", () => {
   assert.match(idLine ?? "", /^\s+local_81d31fdc/);
 });
 
+test("剩余时间按天、小时、分钟取最大单位", () => {
+  const now = Date.parse("2026-10-20T00:00:00.000Z");
+  assert.equal(formatRemaining(now + 24 * 60 * 60 * 1000, now, "zh"), "剩余 1天");
+  assert.equal(formatRemaining(now + 2 * 60 * 60 * 1000, now, "zh"), "剩余 2小时");
+  assert.equal(formatRemaining(now + 30 * 60 * 1000, now, "zh"), "剩余 30分钟");
+  assert.equal(formatRemaining(now + 26 * 60 * 60 * 1000, now, "zh"), "剩余 1天");
+  assert.equal(formatRemaining(now, now, "zh"), "已重置");
+  assert.equal(formatRemaining(now + 24 * 60 * 60 * 1000, now, "en"), "1 day left");
+  assert.equal(formatRemaining(now + 2 * 60 * 60 * 1000, now, "en"), "2 hours left");
+  assert.equal(formatRemaining(now + 30 * 60 * 1000, now, "en"), "30 min left");
+});
+
 test("账号表格对齐，额度按用量上色", () => {
+  const now = Date.parse("2026-10-19T05:19:59.000Z");
   const row = {
     current: true,
     email: "a@example.com",
@@ -56,21 +69,33 @@ test("账号表格对齐，额度按用量上色", () => {
     expired: false,
     expiryNote: null,
     note: null,
-    usage: { fiveHour: 81, sevenDay: 11, sevenDaySonnet: 96, note: null },
+    usage: {
+      fiveHour: 81,
+      sevenDay: 11,
+      sevenDaySonnet: 96,
+      fiveHourResetsAt: "2026-10-19T07:19:59.000Z",
+      sevenDayResetsAt: "2026-10-24T19:59:59.000Z",
+      note: null,
+    },
   };
-  const plain = renderAccountTable({ rows: [row], color: false, columns: 120 });
+  const plain = renderAccountTable({ rows: [row], color: false, columns: 160, now });
   assert.equal(plain.includes("\u001b["), false);
-  assert.match(plain, /状态\s+邮箱\s+档位\s+登录到期\s+5 小时\s+7 天\s+Sonnet/);
-  assert.match(plain, /当前\s+a@example.com\s+Pro\s+2026-11-16 11:33\s+81%\s+11%\s+96%/);
+  assert.match(plain, /状态\s+邮箱\s+档位\s+登录到期\s+5 小时\s+5小时剩余\s+7 天\s+周剩余\s+Sonnet/);
+  assert.match(
+    plain,
+    /当前\s+a@example.com\s+Pro\s+2026-11-16 11:33\s+81%\s+剩余 2小时\s+11%\s+剩余 5天\s+96%/,
+  );
   const idLine = plain.split("\n").find((line) => line.includes(row.accountUuid));
   assert.match(idLine ?? "", /^\s+71f17eac/);
 
-  const colored = renderAccountTable({ rows: [row], color: true, columns: 120 });
+  const colored = renderAccountTable({ rows: [row], color: true, columns: 160, now });
   assert.match(colored, /\u001b\[1;32m当前/);
   assert.match(colored, /\u001b\[1;36ma@example.com/);
   assert.match(colored, /\u001b\[36mPro/);
   assert.match(colored, /\u001b\[33m81%/);
+  assert.match(colored, /\u001b\[36m剩余 2小时/);
   assert.match(colored, /\u001b\[32m11%/);
+  assert.match(colored, /\u001b\[36m剩余 5天/);
   assert.match(colored, /\u001b\[31m96%/);
 });
 
@@ -125,11 +150,33 @@ test("英文表格使用英文表头", () => {
   assert.match(sessions, /Active\s+ujoy\s+import/);
   assert.match(sessions, /Archived\s+ujoy\s+old/);
   assert.match(sessions, /2 sessions/);
+  assert.match(
+    renderSessionTable({
+      email: "a@example.com",
+      accountUuid: "71f17eac-25e9-48b9-8b63-c05b22c21f86",
+      orgUuid: "414b5c5d-9cbb-4754-8647-e0b967072423",
+      color: false,
+      columns: 100,
+      locale: "en",
+      total: 86,
+      rows: [
+        {
+          time: "2026-10-18 21:11",
+          archived: false,
+          project: "ujoy",
+          title: "import",
+          sessionId: "local_81d31fdc-abfe-4a8f-b60c-f938da388636",
+        },
+      ],
+    }),
+    /1 of 86/,
+  );
 
   const accounts = renderAccountTable({
     color: false,
-    columns: 120,
+    columns: 160,
     locale: "en",
+    now: Date.parse("2026-10-19T06:49:59.000Z"),
     rows: [
       {
         current: true,
@@ -141,7 +188,14 @@ test("英文表格使用英文表头", () => {
         expired: false,
         expiryNote: null,
         note: null,
-        usage: { fiveHour: 81, sevenDay: 11, sevenDaySonnet: 96, note: null },
+        usage: {
+          fiveHour: 81,
+          sevenDay: 11,
+          sevenDaySonnet: 96,
+          fiveHourResetsAt: "2026-10-19T07:19:59.000Z",
+          sevenDayResetsAt: null,
+          note: null,
+        },
       },
       {
         current: false,
@@ -158,8 +212,14 @@ test("英文表格使用英文表头", () => {
     ],
   });
   assert.match(accounts, /Desktop accounts\s+2/);
-  assert.match(accounts, /Status\s+Email\s+Plan\s+Login expires\s+5 hours\s+7 days\s+Sonnet/);
-  assert.match(accounts, /Current\s+a@example.com\s+Pro\s+2026-11-16 11:33\s+81%\s+11%\s+96%/);
+  assert.match(
+    accounts,
+    /Status\s+Email\s+Plan\s+Login expires\s+5 hours\s+5h left\s+7 days\s+Week left\s+Sonnet/,
+  );
+  assert.match(
+    accounts,
+    /Current\s+a@example.com\s+Pro\s+2026-11-16 11:33\s+81%\s+30 min left\s+11%\s+—\s+96%/,
+  );
   assert.match(accounts, /Other\s+b@example.com\s+Max 5x/);
   assert.match(accounts, /org 414b5c5d-9cbb-4754-8647-e0b967072423/);
 });
